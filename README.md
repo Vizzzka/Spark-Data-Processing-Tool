@@ -15,7 +15,10 @@ This is the proof of concept (PoC) for the company CopyCat.inc. The company spec
 6. Show the top 10 videos by the ratio of likes/dislikes for each category for the whole period. You should consider only videos with more than 100K views.
 
 **Design document:**
-ll
+
+
+![design-doc](https://user-images.githubusercontent.com/44239963/119057157-a5c09880-b9d4-11eb-8af5-db359595df29.png)
+
 
 **Example:**
 First query report for CAvideos.csv:
