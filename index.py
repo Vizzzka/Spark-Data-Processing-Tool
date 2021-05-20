@@ -1,5 +1,7 @@
 import pyspark
 import os
+from heapq import nlargest
+import time
 from pyspark.sql import SparkSession
 import sys
 import json
@@ -10,7 +12,7 @@ from calendar import monthrange
 
 def date_comparator(date):
     date = date.split('.')
-    return [date[0] + date[2] + date[1]].join('')
+    return ''.join([date[0], date[2], date[1]])
 
 
 def month_by_day(day):
@@ -90,19 +92,19 @@ def third_query(data):
         .reduceByKey(lambda a, b: a + b)\
         .map(lambda x: (x[0][0], [(x[0][1], x[1])]))\
         .reduceByKey(lambda a, b: a + b)\
-        .map(lambda x: (x[0], sorted(x[1], key=lambda val: -len(val[1]))[:10]))\
+        .map(lambda x: (x[0], nlargest(10, x[1], key=lambda val: len(val[1]))))\
         .collect()
 
     report = {"months": []}
     for month in data:
         start_date = month[0][0]
         end_date = month[0][1]
-        top_tags = map(lambda x: {"tag": x[0], "number_of_videos": len(x[1]), "video_ids": x[1]}, month[1])
+        top_tags = list(map(lambda x: {"tag": x[0], "number_of_videos": len(x[1]), "video_ids": x[1]}, month[1]))
         month = {"start_date": start_date, "end_date": end_date, "tags": top_tags}
 
         report["months"].append(month)
 
-    return data
+    return report
 
 
 def fourth_query(data):
@@ -150,15 +152,37 @@ def fifth_query(data):
                    "videos_days": videos_days}
         report["channels"].append(channel)
 
-    return data
+    return report
+
+
+def six_query(data, categories):
+    data = data.map(lambda x: ((x[4], x[0], x[2]), (int(x[8])/(int(x[9]) if int(x[9]) else 1), int(x[7]))))\
+        .filter(lambda x: x[1][1] > 100000)\
+        .reduceByKey(lambda a, b: max(a, b))\
+        .map(lambda x: (x[0][0], [(x[0][1], x[0][2], x[1][0], x[1][1])]))\
+        .reduceByKey(lambda a, b: a + b)\
+        .map(lambda x: (x[0], sorted(x[1], key=lambda val: -val[2])[:10]))\
+        .collect()
+
+    report = {"categories": []}
+    for category in data:
+        category_id = category[0]
+        category_name = (list(filter(lambda x: x["id"] == str(category_id), categories["items"]))
+                         + [{"snippet": {"title": "No title found"}}])[0]["snippet"]["title"]
+        videos = list(map(lambda x: {"video_id": x[0], "video_title": x[1],
+                                     "ratio_likes_dislikes": x[2], "views": x[3]}, category[1]))
+        category = {"category_id": category_id, "category_name": category_name, "videos": videos}
+        report["categories"].append(category)
+
+    return report
 
 
 def store_report(outputPath, report_id, region, report):
-    json_report = json.dumps(report)
-    outputPath = outputPath + "copycat_inc/" + report_id + "/" + region + "/result.json"
-    os.makedirs(os.path.dirname(outputPath), exist_ok=True)
-    with open(outputPath, 'w', encoding='ascii') as f:
-        json.dump(json_report, f, indent=4)
+    json_report = json.dumps(report, indent=4)
+    outputPath = outputPath + "copycat_inc/" + report_id + "/" + region + "/"
+    # os.makedirs(os.path.dirname(outputPath), exist_ok=True)
+    df = ss.read.json(sc.parallelize([json_report]))
+    df.coalesce(1).write.format('json').mode("overwrite").save(outputPath)
 
 
 if __name__ == "__main__":
@@ -176,26 +200,43 @@ if __name__ == "__main__":
         regions[key] = ss.read.option("multiline", True)\
             .csv(inputPath + key + "videos" + ".csv", header=True)\
             .rdd
-        with open(inputPath + key + "_category_id.json", encoding="ascii") as json_file:
-            categories = json.load(json_file)
+        categories = ss.read.option("multiline", True)\
+            .json(inputPath + key + "_category_id.json", encoding="ascii")
+        categories = json.loads(categories.toJSON().collect()[0])
 
+        seconds = time.time()
         report_1 = first_query(regions[key])
-        print(report_1)
+        print(key + "_1 time: " + str(time.time() - seconds))
+        # print(report_1)
         store_report(outputPath, "1", key, report_1)
+        seconds = time.time()
 
         report_2 = second_query(regions[key], categories)
-        print(report_2)
+        print(key + "_2 time: " + str(time.time() - seconds))
+        # print(report_2)
         store_report(outputPath, "2", key, report_2)
+        seconds = time.time()
 
         report_4 = fourth_query(regions[key])
-        print(report_4)
+        print(key + "_4 time: " + str(time.time() - seconds))
+        # print(report_4)
         store_report(outputPath, "4", key, report_4)
+        seconds = time.time()
 
         report_3 = third_query(regions[key])
-        print(report_3)
+        print(key + "_3 time: " + str(time.time() - seconds))
+        # print(report_3)
         store_report(outputPath, "3", key, report_3)
+        seconds = time.time()
 
         report_5 = fifth_query(regions[key])
-        print(report_5)
+        print(key + "_5 time: " + str(time.time() - seconds))
+        # print(report_5)
         store_report(outputPath, "5", key, report_5)
+        seconds = time.time()
+
+        report_6 = six_query(regions[key], categories)
+        print(key + "_6 time: " + str(time.time() - seconds))
+        # print(report_6)
+        store_report(outputPath, "6", key, report_6)
 
